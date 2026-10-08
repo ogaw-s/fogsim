@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DMXファン フォグ到達シミュレーター</title>
+<style>
+:root{
+  --bg:#0f1318; --panel:#171c23; --panel2:#1e252e; --line:#2c3541; --fg:#e6ebf1; --dim:#8b97a6;
+  --acc:#4cc2ff; --ok:#5fd38d; --ng:#ff6b6b; --warn:#ffc857;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,"Hiragino Sans","Yu Gothic UI",sans-serif}
+#app{display:grid;grid-template-columns:350px 1fr;height:100vh}
+#panel{background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;padding:10px 14px 24px}
+#main{display:flex;flex-direction:column;min-width:0;min-height:0}
+h1{font-size:15px;margin:4px 0 8px}
+details{border-top:1px solid var(--line);padding:6px 0}
+summary{cursor:pointer;font-weight:600;padding:4px 0;color:var(--acc)}
+.row{margin:6px 0}
+.row label{display:flex;justify-content:space-between;font-size:12.5px;color:var(--dim)}
+.row output{color:var(--fg);font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;margin:2px 0;accent-color:var(--acc)}
+select,input[type=number]{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 7px;font:inherit;width:100%}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.chk{display:flex;gap:6px;align-items:center;margin:4px 0;font-size:13px}
+button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:7px 12px;font:inherit;cursor:pointer}
+button:hover{border-color:var(--acc)}
+button.on{background:#12405a;border-color:var(--acc)}
+button.fogon{background:#3a4a5c;border-color:#cfe3f5}
+#toolbar{display:flex;flex-wrap:wrap;gap:8px;padding:8px 10px;border-bottom:1px solid var(--line);background:var(--panel)}
+#stagewrap{position:relative;flex:1;min-height:300px}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#tip{position:absolute;pointer-events:none;background:rgba(10,14,18,.92);border:1px solid var(--line);border-radius:6px;padding:4px 8px;font-size:12px;white-space:pre;display:none;z-index:3}
+#metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px;padding:8px 10px;border-top:1px solid var(--line);background:var(--panel);max-height:34vh;overflow-y:auto}
+.card{background:var(--panel2);border-radius:8px;padding:5px 9px}
+.card small{display:block;color:var(--dim);font-size:11px}
+.card b{font-size:15px;font-variant-numeric:tabular-nums}
+.note{font-size:11.5px;color:var(--dim);margin-top:6px}
+#readout{font-size:12px;color:var(--warn);margin:4px 0}
+dialog{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:10px;max-width:96vw;padding:14px}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+table{border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:13px}
+th,td{border-bottom:1px solid var(--line);padding:5px 9px;text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+.tblwrap{overflow-x:auto}
+@media(max-width:820px){
+  #app{display:flex;flex-direction:column;height:auto}
+  #main{order:-1}
+  #stagewrap{flex:none;height:auto;aspect-ratio:4/3;min-height:260px}
+  #metrics{max-height:none}
+  #panel{border-right:none}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="panel">
+    <h1>DMXファン × フォグ到達シミュレーター</h1>
+    <div id="testres" class="note"></div>
+    <details open><summary>機種・風量</summary>
+      <div class="row"><label>機種プリセット</label><select id="preset"></select></div>
+      <div class="two">
+        <div class="row"><label>Q 定格風量 [m³/h]</label><input type="number" id="Q" min="10" step="10"></div>
+        <div class="row"><label>D 吹出し径 [m]</label><input type="number" id="D" min="0.05" max="2" step="0.01"></div>
+      </div>
+      <div id="sl_machine"></div>
+      <div class="chk"><input type="checkbox" id="pf"><label for="pf">100V/50Hz 補正(風量×0.85)</label></div>
+      <div id="readout"></div>
+    </details>
+    <details open><summary>ジオメトリ</summary>
+      <div id="sl_geo"></div>
+      <button id="aim" style="width:100%;margin-top:6px">レンズを狙う</button>
+      <div class="note">ファン位置は (0, 5.0) m 固定。レンズは水平に置いた円盤（側面図では水平の線分）です。</div>
+    </details>
+    <details open><summary>フォグ（濃度・粒子）</summary>
+      <div id="sl_fog"></div>
+    </details>
+    <details><summary>風・拡散</summary>
+      <div id="sl_wind"></div>
+    </details>
+    <details open><summary>表示</summary>
+      <div class="chk"><input type="checkbox" id="vHeat" checked><label for="vHeat">風速ヒートマップ</label></div>
+      <div class="chk"><input type="checkbox" id="vPart" checked><label for="vPart">フォグ粒子</label></div>
+      <div class="chk"><input type="checkbox" id="vConc"><label for="vConc">濃度マップ(粒子から推定, ppm・対数)</label></div>
+      <div class="row"><label>シミュレーション速度</label>
+        <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></div>
+    </details>
+  </div>
+
+  <div id="main">
+    <div id="toolbar">
+      <button id="bFog">フォグ ON</button>
+      <button id="bFan">ファン ON</button>
+      <button id="bReset">リセット(粒子クリア)</button>
+      <button id="bPause">一時停止</button>
+      <button id="bCmp">比較表</button>
+    </div>
+    <div id="stagewrap"><canvas id="cv"></canvas><div id="tip"></div></div>
+    <div id="metrics"></div>
+  </div>
+</div>
+
+<dialog id="dlg">
+  <div class="tblwrap" id="cmpbody"></div>
+  <div class="note" id="cmpnote"></div>
+  <div style="margin-top:10px;text-align:right"><button id="dlgClose">閉じる</button></div>
+</dialog>
+
+<script>
+"use strict";
+/* ============ モデル定数 ============ */
+const LN2=Math.LN2, K=6, KC=5.0 /*スカラー中心濃度の減衰係数*/, CWIDTH=1.2 /*濃度プロファイル幅/速度幅*/;
+const FAN={x:0,y:5};
+const DOM={x0:-0.5,x1:8,y0:0,y1:6};          // 描画・粒子消去範囲（左は吹出口の張り出し分0.5m）
+const PRESETS={
+  'AF-3':{Q:900,D:0.23,dmx:'cont'},
+  'AF-4':{Q:2020,D:0.32,dmx:'cont'},
+  'AF-5X':{Q:2960,D:0.30,dmx:'step3'},
+  'AF-6':{Q:4390,D:0.50,dmx:'cont'},
+  'AF-14C':{Q:4500,D:0.40,dmx:'cont'},
+  'カスタム':{Q:1500,D:0.30,dmx:'cont'}
+};
+function dmxFactor(mode,v){
+  if(mode==='step3'){ if(v<=10)return 0; if(v<=92)return 1351/1743; if(v<=174)return 1567/1743; return 1; }
+  if(v<=5)return 0; return 0.2+0.8*(v-6)/(255-6);
+}
+const jetCenter=(V0,D,s)=> s<=6*D ? V0 : K*V0*D/s;
+const jetB=(D,s)=>Math.max(D/2,0.1*s);
+const concCenter=(C0,D,s,r)=>{ if(s<=0)return 0; const b=jetB(D,s)*CWIDTH;
+  return C0*Math.min(1,KC*D/s)*Math.exp(-LN2*(r/b)*(r/b)); };
+
+/* ============ パラメータ ============ */
+const P={preset:'AF-4',Q:2020,D:0.32,dmx:255,pf:false,
+  theta:30,L:2,lensH:3,lensD:0.3,
+  eta:0.6,ax:0,ay:0,cT:0.06,nu0:0.005,
+  C0:1,rate:400,life:20,wb:0};
+let fogOn=true, fanOn=true, paused=false, simTime=0, tFogStart=0;
+
+/* 1回の計算（現在値でも比較表でも使う） */
+function calc(p,fan=true){
+  const pre=PRESETS[p.preset]||PRESETS['カスタム'];
+  const f=dmxFactor(pre.dmx,p.dmx)*(p.pf?0.85:1);
+  const Qh=p.Q*f, V0=fan?(Qh/3600)/(Math.PI*p.D*p.D/4):0;
+  const th=p.theta*Math.PI/180, ax=Math.cos(th), ay=-Math.sin(th), nx=-ay, ny=ax;
+  const dx=p.L-FAN.x, dy=p.lensH-FAN.y;
+  const s=dx*ax+dy*ay, r=dx*nx+dy*ny;
+  const b=s>0?jetB(p.D,s):p.D/2;
+  const Uth=(s>0&&V0>0)?jetCenter(V0,p.D,s)*Math.exp(-LN2*(r/b)*(r/b)):0;
+  const Cl=concCenter(p.C0,p.D,s,r);
+  return {Qh,f,V0,ax,ay,nx,ny,s,r,b,Uth,Ueta:Uth*p.eta,Cl};
+}
+function lensSeg(){ const h=P.lensD/2; return {cx:P.L,cy:P.lensH,ax:P.L-h,ay:P.lensH,bx:P.L+h,by:P.lensH}; }
+
+/* ============ UI生成 ============ */
+const $=id=>document.getElementById(id), ctl={};
+function fmt(v){const a=Math.abs(v); return a>=100?v.toFixed(0):a>=10?v.toFixed(1):a>=1?v.toFixed(2):a===0?'0':v.toPrecision(2);}
+function slider(parent,key,label,min,max,step,unit,opt={}){
+  const log=!!opt.log, w=document.createElement('div'); w.className='row';
+  w.innerHTML=`<label><span>${label}</span><output></output></label><input type="range">`;
+  const inp=w.querySelector('input'), out=w.querySelector('output');
+  if(log){inp.min=0;inp.max=1000;inp.step=1;} else {inp.min=min;inp.max=max;inp.step=step;}
+  const toVal=()=>log?min*Math.pow(max/min,inp.value/1000):+inp.value;
+  const fromVal=v=>log?Math.round(1000*Math.log(v/min)/Math.log(max/min)):v;
+  const show=()=>{out.textContent=fmt(P[key])+' '+unit;};
+  inp.oninput=()=>{P[key]=toVal();show();onParam();};
+  ctl[key]={set(v){P[key]=v;inp.value=fromVal(v);show();}};
+  ctl[key].set(P[key]); parent.appendChild(w);
+}
+slider($('sl_machine'),'dmx','DMX値',0,255,1,'');
+slider($('sl_geo'),'theta','俯角 θ（0°=水平, 90°=真下）',0,90,0.5,'°');
+slider($('sl_geo'),'L','レンズ水平距離 L',0.5,7.8,0.05,'m');
+slider($('sl_geo'),'lensH','レンズ高さ',0.5,5.5,0.05,'m');
+slider($('sl_geo'),'lensD','レンズ直径',0.05,1,0.01,'m');
+slider($('sl_fog'),'C0','フォグ濃度（見た目）C0',0.001,100,0,'ppm',{log:true});
+slider($('sl_fog'),'rate','粒子発生レート',50,1500,10,'個/s');
+slider($('sl_fog'),'life','粒子寿命',5,60,1,'s');
+slider($('sl_fog'),'wb','浮力項 鉛直速度 w_b（−=重い）',-0.5,0.5,0.01,'m/s');
+slider($('sl_wind'),'eta','実機補正係数 η',0.3,1,0.01,'');
+slider($('sl_wind'),'ax','周囲気流 ax',-1,1,0.01,'m/s');
+slider($('sl_wind'),'ay','周囲気流 ay',-1,1,0.01,'m/s');
+slider($('sl_wind'),'cT','乱流拡散係数 c',0.005,0.3,0.005,'');
+slider($('sl_wind'),'nu0','噴流外 νt0',0.001,0.05,0.001,'m²/s');
+
+const selPreset=$('preset');
+Object.keys(PRESETS).forEach(n=>selPreset.add(new Option(n,n)));
+function applyPreset(name){
+  P.preset=name; selPreset.value=name;
+  if(name!=='カスタム'){P.Q=PRESETS[name].Q;P.D=PRESETS[name].D;}
+  $('Q').value=P.Q; $('D').value=P.D;
+}
+selPreset.onchange=()=>{applyPreset(selPreset.value);onParam();};
+$('Q').oninput=()=>{P.Q=Math.max(1,+$('Q').value||1);P.preset='カスタム';selPreset.value='カスタム';onParam();};
+$('D').oninput=()=>{P.D=Math.max(0.05,+$('D').value||0.05);P.preset='カスタム';selPreset.value='カスタム';onParam();};
+$('pf').onchange=()=>{P.pf=$('pf').checked;onParam();};
+$('aim').onclick=()=>{
+  const th=Math.atan2(FAN.y-P.lensH,P.L-FAN.x)*180/Math.PI;
+  ctl.theta.set(Math.min(90,Math.max(0,Math.round(th*2)/2))); onParam();
+};
+applyPreset('AF-4');
+// 初期は「レンズを狙う」
+(()=>{const th=Math.atan2(FAN.y-P.lensH,P.L-FAN.x)*180/Math.PI; ctl.theta.set(Math.round(th*2)/2);})();
+
+/* ツールバー */
+function setFog(v){
+  fogOn=v; $('bFog').textContent=v?'フォグ ON':'フォグ OFF'; $('bFog').classList.toggle('fogon',v);
+  if(v){ clearParticles(); tFogStart=simTime;  }
+}
+$('bFog').onclick=()=>setFog(!fogOn);
+$('bFan').onclick=()=>{fanOn=!fanOn;$('bFan').textContent=fanOn?'ファン ON':'ファン OFF';$('bFan').classList.toggle('on',fanOn);onParam();};
+$('bReset').onclick=()=>{clearParticles();tFogStart=simTime;};
+$('bPause').onclick=()=>{paused=!paused;$('bPause').textContent=paused?'再開':'一時停止';$('bPause').classList.toggle('on',paused);};
+$('bFan').classList.add('on'); $('bFog').classList.add('fogon');
+
+/* ============ 粒子 ============ */
+/* 粒子は噴流軸まわりの3次元位置 (s, ξ1=面内, ξ2=面外) を追跡する。側面図にはその投影を描く。
+   軸対称噴流の希釈(体積流量∝s)は2D断面では再現できないため、濃度は (s,ρ) ビンの体積密度から推定する。 */
+const MAXP=30000, px=new Float32Array(MAXP), py=new Float32Array(MAXP), pz=new Float32Array(MAXP), pa=new Float32Array(MAXP);
+let np=0, emitAcc=0;
+const GW=80, GH=60, CELL=0.1;           // 濃度マップの表示セル
+const SB=120, RB=60, DS=0.1, DR=0.05;   // 濃度ビン: s 0〜12 m, ρ 0〜3 m
+const cnt=new Float32Array(SB*RB), dens=new Float32Array(SB*RB);
+function clearParticles(){np=0;emitAcc=0;cnt.fill(0);dens.fill(0);}
+let spare=null;
+function randn(){ if(spare!==null){const v=spare;spare=null;return v;}
+  let u=0,v=0; while(u===0)u=Math.random(); v=Math.random();
+  const m=Math.sqrt(-2*Math.log(u)); spare=m*Math.sin(2*Math.PI*v); return m*Math.cos(2*Math.PI*v); }
+/* 噴流場: 軸方向速度 u、連続の式による半径方向流入 vr、乱流拡散 νt とそのドリフト補正 ∇νt（ρ=軸からの半径≥0）
+   u=Uc·E(ρ), E=exp(-ln2 (ρ/b)²)。軸対称の連続の式 vr=-(1/ρ)∫0^ρ ρ'(∂u/∂s)dρ' を解析的に評価 */
+const FJ={u:0,vr:0,nu:0,gs:0,gr:0};
+function jetField(V,D,s,rho,c,nu0){
+  if(!(V>0&&s>0)){FJ.u=0;FJ.vr=0;FJ.nu=nu0;FJ.gs=0;FJ.gr=0;return;}
+  const a=LN2, core=s<=6*D, Uc=core?V:K*V*D/s, dUc=core?0:-K*V*D/(s*s);
+  const hb=0.1*s>D/2, b=hb?0.1*s:D/2, db=hb?0.1:0;
+  const xi=rho*rho/(b*b), E=Math.exp(-a*xi);
+  FJ.u=Uc*E;
+  FJ.vr=rho>1e-5?-(dUc*(b*b/(2*a))*(1-E)+Uc*a*db*b*((1-E)/(a*a)-xi*E/a))/rho:0;
+  const UB=Uc*b; FJ.nu=nu0+c*UB*E;
+  FJ.gs=c*((dUc*b+Uc*db)*E+UB*E*2*a*xi*db/b);
+  FJ.gr=c*UB*E*(-2*a*rho/(b*b));
+}
+const EMIT_F=(1-Math.exp(-LN2))/LN2;   // 吹出口の流束 ∫u dA = V·A·EMIT_F（A=πD²/4, 吹出口でも同じガウス分布を仮定）
+function step(dt){
+  simTime+=dt;
+  const d=calc(P,fanOn), V0=d.V0, eta=P.eta, D=P.D, ax=d.ax, ay=d.ay, nx=d.nx, ny=d.ny;
+  // 発生: 吹出口の円盤上で、流束(u×面積)に比例する分布
+  if(fogOn){
+    emitAcc+=P.rate*dt;
+    while(emitAcc>=1){ emitAcc-=1; if(np>=MAXP)continue;
+      let rho; do{rho=D/2*Math.sqrt(Math.random());}while(Math.random()>Math.exp(-LN2*(2*rho/D)*(2*rho/D)));
+      const ph=Math.random()*2*Math.PI, r=rho*Math.cos(ph);
+      px[np]=FAN.x+nx*r; py[np]=FAN.y+ny*r; pz[np]=rho*Math.sin(ph); pa[np]=0; np++; }
+  }
+  // 更新
+  const life=P.life, sq=Math.sqrt;
+  for(let i=0;i<np;){
+    const x=px[i], y=py[i], z=pz[i];
+    const dx=x-FAN.x, dy=y-FAN.y, s=dx*ax+dy*ay, r=dx*nx+dy*ny, rho=Math.hypot(r,z);
+    jetField(eta*V0,D,s,rho,P.cT,P.nu0);
+    const vs=FJ.u+FJ.gs, f=rho>1e-6?(FJ.vr+FJ.gr)/rho:0, vn=f*r, sg=sq(2*FJ.nu*dt);
+    const x1=x+(vs*ax+vn*nx+P.ax)*dt+sg*randn();
+    const y1=y+(vs*ay+vn*ny+P.ay+P.wb)*dt+sg*randn();
+    const z1=z+f*z*dt+sg*randn();
+    pa[i]+=dt;
+    if(pa[i]>life||x1<DOM.x0||x1>DOM.x1||y1<DOM.y0||y1>DOM.y1||Math.abs(z1)>4){
+      np--; px[i]=px[np];py[i]=py[np];pz[i]=pz[np];pa[i]=pa[np]; continue; }
+    px[i]=x1;py[i]=y1;pz[i]=z1;
+    const dx1=x1-FAN.x, dy1=y1-FAN.y, s1=dx1*ax+dy1*ay, r1=dx1*nx+dy1*ny;
+    if(s1>=0){ const si=(s1/DS)|0, ri=(Math.hypot(r1,z1)/DR)|0; if(si<SB&&ri<RB)cnt[si*RB+ri]++; }
+    i++;
+  }
+  const a=1-Math.exp(-dt/1.0);
+  for(let i=0;i<cnt.length;i++){dens[i]+=(cnt[i]-dens[i])*a;cnt[i]=0;}
+}
+/* 粒子からの濃度推定: 体積粒子密度 / n_ref × C0。n_ref = 吹出口で濃度C0に相当する粒子体積密度 = 発生レート/(η·Q'·EMIT_F) */
+function nRef(){ const d=calc(P,fanOn), A=Math.PI*P.D*P.D/4, V=Math.max(P.eta*d.V0,0.2); return P.rate/(V*A*EMIT_F); }
+function concBin(s,rho,nr){
+  if(s<0||s>=SB*DS||rho>=RB*DR)return 0;
+  const i=(s/DS)|0, j=(rho/DR)|0, vol=Math.PI*((j+1)*(j+1)-j*j)*DR*DR*DS;
+  return dens[i*RB+j]/vol/nr*P.C0;
+}
+function concWorld(x,y,ax,ay,nx,ny,nr){ const dx=x-FAN.x, dy=y-FAN.y; return concBin(dx*ax+dy*ay,Math.abs(dx*nx+dy*ny),nr); }
+function simConcAt(x,y,R=0){
+  const d=calc(P,fanOn), nr=nRef();
+  if(R<=0)return concWorld(x,y,d.ax,d.ay,d.nx,d.ny,nr);
+  let sum=0,n=0; const m=4;
+  for(let j=-m;j<=m;j++)for(let i=-m;i<=m;i++){ const ox_=R*i/m, oy_=R*j/m; if(Math.hypot(ox_,oy_)>R)continue;
+    sum+=concWorld(x+ox_,y+oy_,d.ax,d.ay,d.nx,d.ny,nr); n++; }
+  return sum/n;
+}
+
+/* ============ 描画 ============ */
+const cv=$('cv'), ctx=cv.getContext('2d'), stage=$('stagewrap');
+let W=0,H=0,dpr=1,sc=1,ox=0,oy=0; const M={l:40,r:12,t:12,b:26};
+function resize(){
+  dpr=window.devicePixelRatio||1; W=stage.clientWidth; H=stage.clientHeight;
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  sc=Math.max(10,Math.min((W-M.l-M.r)/(DOM.x1-DOM.x0),(H-M.t-M.b)/(DOM.y1-DOM.y0)));
+  ox=M.l; oy=M.t+(DOM.y1-DOM.y0)*sc;
+}
+new ResizeObserver(resize).observe(stage);
+const X=x=>ox+(x-DOM.x0)*sc, Y=y=>oy-y*sc;
+const hc=document.createElement('canvas'); hc.width=170; hc.height=120; const hx=hc.getContext('2d');
+const cc=document.createElement('canvas'); cc.width=GW; cc.height=GH; const cx2=cc.getContext('2d');
+let heatDirty=true, heatMax=1;
+function onParam(){heatDirty=true;updateReadout();}
+function heatColor(t){ // 0..1 -> [r,g,b]
+  const st=[[0,[30,40,120]],[.33,[0,170,210]],[.66,[245,205,50]],[1,[240,70,50]]];
+  t=Math.min(1,Math.max(0,t)); for(let i=1;i<st.length;i++){ if(t<=st[i][0]){const a=st[i-1],b=st[i],f=(t-a[0])/(b[0]-a[0]);
+    return [0,1,2].map(k=>a[1][k]+(b[1][k]-a[1][k])*f);} } return st[3][1];
+}
+function buildHeat(){
+  const d=calc(P,fanOn), V=d.V0*P.eta;
+  heatMax=Math.max(V,Math.hypot(P.ax,P.ay),0.5);
+  const img=hx.createImageData(170,120), dxw=(DOM.x1-DOM.x0)/170, dyw=(DOM.y1-DOM.y0)/120;
+  for(let j=0;j<120;j++)for(let i=0;i<170;i++){
+    const x=DOM.x0+(i+.5)*dxw, y=DOM.y1-(j+.5)*dyw;
+    const ddx=x-FAN.x, ddy=y-FAN.y, s=ddx*d.ax+ddy*d.ay, r=ddx*d.nx+ddy*d.ny;
+    let u=0; if(d.V0>0&&s>0){u=P.eta*jetCenter(d.V0,P.D,s)*Math.exp(-LN2*(r/jetB(P.D,s))**2);}
+    const vx=u*d.ax+P.ax, vy=u*d.ay+P.ay, v=Math.hypot(vx,vy), t=v/heatMax, c=heatColor(t), o=(j*170+i)*4;
+    img.data[o]=c[0];img.data[o+1]=c[1];img.data[o+2]=c[2];img.data[o+3]=Math.round(255*(0.05+0.4*Math.min(1,t*1.3)));
+  }
+  hx.putImageData(img,0,0); heatDirty=false;
+}
+function buildConc(){
+  const img=cx2.createImageData(GW,GH), nr=nRef(), lo=Math.log10(P.C0/1000), span=3, d=calc(P,fanOn);
+  for(let iy=0;iy<GH;iy++)for(let ix=0;ix<GW;ix++){
+    const c=concWorld((ix+.5)*CELL,(iy+.5)*CELL,d.ax,d.ay,d.nx,d.ny,nr), o=((GH-1-iy)*GW+ix)*4;
+    if(c<=0){img.data[o+3]=0;continue;}
+    const t=Math.min(1,Math.max(0,(Math.log10(c)-lo)/span));
+    img.data[o]=120+135*t;img.data[o+1]=60+170*t*t;img.data[o+2]=190-120*t+65*t*t;
+    img.data[o+3]=Math.round(230*Math.pow(t,0.9));
+  }
+  cx2.putImageData(img,0,0);
+}
+function draw(){
+  ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
+  const d=calc(P,fanOn);
+  ctx.fillStyle='#0b0f14'; ctx.fillRect(X(DOM.x0),Y(DOM.y1),(DOM.x1-DOM.x0)*sc,(DOM.y1-DOM.y0)*sc);
+  ctx.save(); ctx.beginPath(); ctx.rect(X(DOM.x0),Y(DOM.y1),(DOM.x1-DOM.x0)*sc,(DOM.y1-DOM.y0)*sc); ctx.clip();
+  if($('vHeat').checked){ if(heatDirty)buildHeat(); ctx.imageSmoothingEnabled=true;
+    ctx.drawImage(hc,X(DOM.x0),Y(DOM.y1),(DOM.x1-DOM.x0)*sc,(DOM.y1-DOM.y0)*sc); }
+  if($('vConc').checked){ buildConc(); ctx.imageSmoothingEnabled=true; ctx.drawImage(cc,X(0),Y(6),8*sc,6*sc); }
+  // グリッド
+  ctx.lineWidth=1; ctx.strokeStyle='rgba(255,255,255,.09)'; ctx.fillStyle='#8b97a6'; ctx.font='11px system-ui';
+  ctx.beginPath(); for(let x=0;x<=8;x++){ctx.moveTo(X(x),Y(0));ctx.lineTo(X(x),Y(6));}
+  for(let y=0;y<=6;y++){ctx.moveTo(X(DOM.x0),Y(y));ctx.lineTo(X(DOM.x1),Y(y));} ctx.stroke();
+  // 噴流半値幅境界
+  if(d.V0>0){ ctx.setLineDash([6,4]); ctx.strokeStyle='rgba(255,255,255,.55)'; ctx.beginPath();
+    for(const sg of [1,-1]){ for(let s=0;s<=14;s+=0.1){ const b=jetB(P.D,s)*sg, x=FAN.x+d.ax*s+d.nx*b, y=FAN.y+d.ay*s+d.ny*b;
+      s===0?ctx.moveTo(X(x),Y(y)):ctx.lineTo(X(x),Y(y)); } }
+    ctx.stroke(); ctx.setLineDash([]); }
+  // 粒子
+  if($('vPart').checked){
+    ctx.globalCompositeOperation='lighter'; ctx.fillStyle='#fff';
+    const base=Math.min(0.7,0.05+0.12*Math.log10(1+P.C0/0.1)), life=P.life, sz=Math.max(1.6,sc*0.012);
+    for(let i=0;i<np;i++){ const fade=Math.min(1,(life-pa[i])/(0.25*life)); ctx.globalAlpha=base*fade;
+      ctx.fillRect(X(px[i])-sz/2,Y(py[i])-sz/2,sz,sz); }
+    ctx.globalAlpha=1; ctx.globalCompositeOperation='source-over';
+  }
+  ctx.restore();
+  // 床
+  ctx.fillStyle='#3a2f26'; ctx.fillRect(X(DOM.x0),Y(0),(DOM.x1-DOM.x0)*sc,6);
+  ctx.strokeStyle='#8a6d4e'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(X(DOM.x0),Y(0));ctx.lineTo(X(DOM.x1),Y(0));ctx.stroke();
+  // 目盛
+  ctx.fillStyle='#8b97a6'; ctx.font='11px system-ui'; ctx.textAlign='center';
+  for(let x=0;x<=8;x++)ctx.fillText(x+'m',X(x),Y(0)+20);
+  ctx.textAlign='right'; for(let y=1;y<=6;y++)ctx.fillText(y+'m',X(DOM.x0)-4,Y(y)+4);
+  // ファン
+  ctx.save(); ctx.translate(X(FAN.x),Y(FAN.y)); ctx.rotate(Math.atan2(-d.ay,d.ax));
+  const fw=P.D*sc, ft=0.12*sc; ctx.fillStyle=fanOn?'#4cc2ff':'#566270'; ctx.fillRect(-ft,-fw/2,ft,fw);
+  ctx.strokeStyle=fanOn?'#4cc2ff':'#566270'; ctx.lineWidth=2; ctx.beginPath();
+  ctx.moveTo(4,0);ctx.lineTo(0.5*sc,0);ctx.lineTo(0.5*sc-7,-4);ctx.moveTo(0.5*sc,0);ctx.lineTo(0.5*sc-7,4);ctx.stroke(); ctx.restore();
+  ctx.fillStyle='#e6ebf1'; ctx.textAlign='left'; ctx.fillText('ファン',X(FAN.x)+8,Y(FAN.y)-8);
+  // レンズ
+  const L=lensSeg(); ctx.strokeStyle='#ffc857'; ctx.lineWidth=4; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(X(L.ax),Y(L.ay)); ctx.lineTo(X(L.bx),Y(L.by)); ctx.stroke(); ctx.lineCap='butt';
+  ctx.fillStyle='#ffc857'; ctx.beginPath(); ctx.arc(X(L.cx),Y(L.cy),3,0,7); ctx.fill();
+  ctx.fillText('レンズ',X(L.cx)+8,Y(L.cy)-8);
+  // 凡例
+  ctx.textAlign='right'; ctx.fillStyle='#8b97a6';
+  ctx.fillText('風速ヒートマップ 最大 '+heatMax.toFixed(1)+' m/s',X(DOM.x1)-6,Y(DOM.y1)+14);
+  if($('vConc').checked) ctx.fillText('濃度マップ '+fmt(P.C0/1000)+'〜'+fmt(P.C0)+' ppm(対数)',X(DOM.x1)-6,Y(DOM.y1)+28);
+  ctx.textAlign='left';
+}
+
+/* ============ 計測パネル ============ */
+const MET=[['Uth','レンズ風速 理論値'],['Ueta','レンズ風速 η適用後'],['geo','距離 s / ずれ r'],['w2b','噴流幅 2b'],
+  
+  ['Cth','レンズ濃度 解析値'],['Csim','レンズ濃度 粒子推定']];
+$('metrics').innerHTML=MET.map(([k,l])=>`<div class="card"><small>${l}</small><b id="m_${k}">–</b></div>`).join('');
+const setM=(k,t)=>{$('m_'+k).textContent=t;};
+function updateMetrics(){
+  const d=calc(P,fanOn), lens=lensSeg();
+  setM('Uth',d.Uth.toFixed(2)+' m/s'); setM('Ueta',d.Ueta.toFixed(2)+' m/s');
+  setM('geo',d.s.toFixed(2)+' m / '+d.r.toFixed(2)+' m'); setM('w2b',(2*d.b).toFixed(2)+' m');
+  const cs=simConcAt(lens.cx,lens.cy,Math.max(0.15,P.lensD/2));
+  setM('Cth',fmt(d.Cl)+' ppm');
+  setM('Csim',fmt(cs)+' ppm');
+}
+function updateReadout(){
+  const pre=PRESETS[P.preset]||PRESETS['カスタム'], d=calc(P,true);
+  $('readout').textContent=`実効風量 Q'=${d.Qh.toFixed(0)} m³/h（倍率 ${(d.f*100).toFixed(0)}%）／吹出し風速 V0=${d.V0.toFixed(2)} m/s（η適用後 ${(d.V0*P.eta).toFixed(2)}）`;
+}
+
+/* ============ ツールチップ ============ */
+const tip=$('tip');
+cv.addEventListener('pointermove',e=>{
+  const rc=cv.getBoundingClientRect(), mx=e.clientX-rc.left, my=e.clientY-rc.top;
+  const x=(mx-ox)/sc+DOM.x0, y=(oy-my)/sc;
+  if(x<DOM.x0||x>DOM.x1||y<0||y>6){tip.style.display='none';return;}
+  const d=calc(P,fanOn), dx=x-FAN.x, dy=y-FAN.y, s=dx*d.ax+dy*d.ay, r=dx*d.nx+dy*d.ny;
+  let u=0; if(d.V0>0&&s>0)u=P.eta*jetCenter(d.V0,P.D,s)*Math.exp(-LN2*(r/jetB(P.D,s))**2);
+  const v=Math.hypot(u*d.ax+P.ax,u*d.ay+P.ay), ca=concCenter(P.C0,P.D,s,r), cs=simConcAt(x,y,0.1);
+  tip.textContent=`(${x.toFixed(2)}, ${y.toFixed(2)}) m\n風速 ${v.toFixed(2)} m/s\n濃度 解析 ${fmt(ca)} / 粒子推定 ${fmt(cs)} ppm`;
+  tip.style.display='block'; tip.style.left=Math.min(mx+14,W-190)+'px'; tip.style.top=Math.max(4,my-20)+'px';
+});
+cv.addEventListener('pointerleave',()=>{tip.style.display='none';});
+
+/* ============ 比較表 ============ */
+$('bCmp').onclick=()=>{
+  const rows=Object.keys(PRESETS).map(n=>{
+    const q={...P,preset:n}; if(n!=='カスタム'||P.preset!=='カスタム'){q.Q=PRESETS[n].Q;q.D=PRESETS[n].D;}
+    const c=calc(q,true);
+    return `<tr><td>${n}</td><td>${c.Qh.toFixed(0)}</td><td>${c.V0.toFixed(2)}</td><td>${c.Uth.toFixed(2)}</td><td>${c.Ueta.toFixed(2)}</td>
+      <td>${(2*c.b).toFixed(2)}</td><td>${fmt(c.Cl)}</td></tr>`; }).join('');
+  $('cmpbody').innerHTML=`<table><thead><tr><th>機種</th><th>Q' [m³/h]</th><th>V0 [m/s]</th><th>レンズ風速 理論</th><th>η適用後 [m/s]</th><th>噴流幅2b [m]</th><th>レンズ濃度 [ppm]</th></tr></thead><tbody>${rows}</tbody></table>`;
+  $('cmpnote').textContent=`条件: DMX=${P.dmx}, ${P.pf?'100V/50Hz補正あり':'補正なし'}, θ=${P.theta}°, レンズ(L=${P.L} m, 高さ${P.lensH} m), η=${P.eta}, フォグ濃度C0=${fmt(P.C0)} ppm。各機種は現在のDMX値・向きのまま比較（カスタムは現在の入力値）。`;
+  $('dlg').showModal();
+};
+$('dlgClose').onclick=()=>$('dlg').close();
+
+/* ============ 受け入れテスト ============ */
+function runTests(){
+  const cases=[['AF-3',2,4.2],['AF-3',3,2.8],['AF-4',3,4.5],['AF-4',4,3.4],['AF-6',3,6.2]];
+  const rows=cases.map(([n,s,exp])=>{
+    const p={...P,preset:n,Q:PRESETS[n].Q,D:PRESETS[n].D,dmx:255,pf:false,eta:1,ax:0,ay:0,theta:90};
+    const c=calc(p,true), got=jetCenter(c.V0,p.D,s)*p.eta, err=(got-exp)/exp*100;
+    return {機種:n,'s[m]':s,期待値:exp,計算値:+got.toFixed(3),'誤差%':+err.toFixed(2),結果:Math.abs(err)<=5?'PASS':'FAIL'};
+  });
+  console.log('受け入れテスト (η=1, 周囲気流0, θ=90°)'); console.table(rows);
+  const ok=rows.every(r=>r.結果==='PASS');
+  console.log(ok?'ALL PASS':'FAILED');
+  $('testres').innerHTML=`受け入れテスト: <b style="color:${ok?'var(--ok)':'var(--ng)'}">${rows.filter(r=>r.結果==='PASS').length}/${rows.length} ${ok?'PASS':'FAIL'}</b>（詳細はコンソール）`;
+}
+
+/* ============ メインループ ============ */
+let last=performance.now(), mAcc=0;
+function frame(now){
+  const dt=Math.min((now-last)/1000,0.05); last=now;
+  if(!paused){
+    const sd=dt*(+$('speed').value), n=Math.max(1,Math.ceil(sd/(1/45))), h=sd/n;
+    for(let i=0;i<n;i++)step(h);
+  }
+  draw();
+  mAcc+=dt; if(mAcc>0.2){mAcc=0;updateMetrics();}
+  requestAnimationFrame(frame);
+}
+resize(); updateReadout(); setFog(true); runTests();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
