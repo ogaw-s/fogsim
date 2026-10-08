@@ -57,7 +57,6 @@ th:first-child,td:first-child{text-align:left}
 <div id="app">
   <div id="panel">
     <h1>DMXファン × フォグ到達シミュレーター</h1>
-    <div id="testres" class="note"></div>
     <details open><summary>機種・風量</summary>
       <div class="row"><label>機種プリセット</label><select id="preset"></select></div>
       <div class="two">
@@ -65,8 +64,6 @@ th:first-child,td:first-child{text-align:left}
         <div class="row"><label>D 吹出し径 [m]</label><input type="number" id="D" min="0.05" max="2" step="0.01"></div>
       </div>
       <div id="sl_machine"></div>
-      <div class="chk"><input type="checkbox" id="pf"><label for="pf">100V/50Hz 補正(風量×0.85)</label></div>
-      <div id="readout"></div>
     </details>
     <details open><summary>ジオメトリ</summary>
       <div id="sl_geo"></div>
@@ -94,18 +91,12 @@ th:first-child,td:first-child{text-align:left}
       <button id="bFan">ファン ON</button>
       <button id="bReset">リセット(粒子クリア)</button>
       <button id="bPause">一時停止</button>
-      <button id="bCmp">比較表</button>
     </div>
     <div id="stagewrap"><canvas id="cv"></canvas><div id="tip"></div></div>
     <div id="metrics"></div>
   </div>
 </div>
 
-<dialog id="dlg">
-  <div class="tblwrap" id="cmpbody"></div>
-  <div class="note" id="cmpnote"></div>
-  <div style="margin-top:10px;text-align:right"><button id="dlgClose">閉じる</button></div>
-</dialog>
 
 <script>
 "use strict";
@@ -192,7 +183,6 @@ function applyPreset(name){
 selPreset.onchange=()=>{applyPreset(selPreset.value);onParam();};
 $('Q').oninput=()=>{P.Q=Math.max(1,+$('Q').value||1);P.preset='カスタム';selPreset.value='カスタム';onParam();};
 $('D').oninput=()=>{P.D=Math.max(0.05,+$('D').value||0.05);P.preset='カスタム';selPreset.value='カスタム';onParam();};
-$('pf').onchange=()=>{P.pf=$('pf').checked;onParam();};
 $('aim').onclick=()=>{
   const th=Math.atan2(FAN.y-P.lensH,P.L-FAN.x)*180/Math.PI;
   ctl.theta.set(Math.min(90,Math.max(0,Math.round(th*2)/2))); onParam();
@@ -303,7 +293,7 @@ const X=x=>ox+(x-DOM.x0)*sc, Y=y=>oy-y*sc;
 const hc=document.createElement('canvas'); hc.width=170; hc.height=120; const hx=hc.getContext('2d');
 const cc=document.createElement('canvas'); cc.width=GW; cc.height=GH; const cx2=cc.getContext('2d');
 let heatDirty=true, heatMax=1;
-function onParam(){heatDirty=true;updateReadout();}
+function onParam(){heatDirty=true;}
 function heatColor(t){ // 0..1 -> [r,g,b]
   const st=[[0,[30,40,120]],[.33,[0,170,210]],[.66,[245,205,50]],[1,[240,70,50]]];
   t=Math.min(1,Math.max(0,t)); for(let i=1;i<st.length;i++){ if(t<=st[i][0]){const a=st[i-1],b=st[i],f=(t-a[0])/(b[0]-a[0]);
@@ -398,10 +388,6 @@ function updateMetrics(){
   setM('Cth',fmt(d.Cl)+' ppm');
   setM('Csim',fmt(cs)+' ppm');
 }
-function updateReadout(){
-  const pre=PRESETS[P.preset]||PRESETS['カスタム'], d=calc(P,true);
-  $('readout').textContent=`実効風量 Q'=${d.Qh.toFixed(0)} m³/h（倍率 ${(d.f*100).toFixed(0)}%）／吹出し風速 V0=${d.V0.toFixed(2)} m/s（η適用後 ${(d.V0*P.eta).toFixed(2)}）`;
-}
 
 /* ============ ツールチップ ============ */
 const tip=$('tip');
@@ -417,19 +403,6 @@ cv.addEventListener('pointermove',e=>{
 });
 cv.addEventListener('pointerleave',()=>{tip.style.display='none';});
 
-/* ============ 比較表 ============ */
-$('bCmp').onclick=()=>{
-  const rows=Object.keys(PRESETS).map(n=>{
-    const q={...P,preset:n}; if(n!=='カスタム'||P.preset!=='カスタム'){q.Q=PRESETS[n].Q;q.D=PRESETS[n].D;}
-    const c=calc(q,true);
-    return `<tr><td>${n}</td><td>${c.Qh.toFixed(0)}</td><td>${c.V0.toFixed(2)}</td><td>${c.Uth.toFixed(2)}</td><td>${c.Ueta.toFixed(2)}</td>
-      <td>${(2*c.b).toFixed(2)}</td><td>${fmt(c.Cl)}</td></tr>`; }).join('');
-  $('cmpbody').innerHTML=`<table><thead><tr><th>機種</th><th>Q' [m³/h]</th><th>V0 [m/s]</th><th>レンズ風速 理論</th><th>η適用後 [m/s]</th><th>噴流幅2b [m]</th><th>レンズ濃度 [ppm]</th></tr></thead><tbody>${rows}</tbody></table>`;
-  $('cmpnote').textContent=`条件: DMX=${P.dmx}, ${P.pf?'100V/50Hz補正あり':'補正なし'}, θ=${P.theta}°, レンズ(L=${P.L} m, 高さ${P.lensH} m), η=${P.eta}, フォグ濃度C0=${fmt(P.C0)} ppm。各機種は現在のDMX値・向きのまま比較（カスタムは現在の入力値）。`;
-  $('dlg').showModal();
-};
-$('dlgClose').onclick=()=>$('dlg').close();
-
 /* ============ 受け入れテスト ============ */
 function runTests(){
   const cases=[['AF-3',2,4.2],['AF-3',3,2.8],['AF-4',3,4.5],['AF-4',4,3.4],['AF-6',3,6.2]];
@@ -441,7 +414,6 @@ function runTests(){
   console.log('受け入れテスト (η=1, 周囲気流0, θ=90°)'); console.table(rows);
   const ok=rows.every(r=>r.結果==='PASS');
   console.log(ok?'ALL PASS':'FAILED');
-  $('testres').innerHTML=`受け入れテスト: <b style="color:${ok?'var(--ok)':'var(--ng)'}">${rows.filter(r=>r.結果==='PASS').length}/${rows.length} ${ok?'PASS':'FAIL'}</b>（詳細はコンソール）`;
 }
 
 /* ============ メインループ ============ */
@@ -456,7 +428,7 @@ function frame(now){
   mAcc+=dt; if(mAcc>0.2){mAcc=0;updateMetrics();}
   requestAnimationFrame(frame);
 }
-resize(); updateReadout(); setFog(true); runTests();
+resize(); setFog(true); runTests();
 requestAnimationFrame(frame);
 </script>
 </body>
